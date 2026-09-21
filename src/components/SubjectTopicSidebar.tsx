@@ -598,7 +598,8 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
               >
                 {/* Subject Header Row */}
                 <div
-                  onClick={() => {
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('button, form, input')) return;
                     if (didDragRef.current) return;
                     handleToggleSubject(subjectName);
                   }}
@@ -653,8 +654,11 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                         id={`delete-subject-btn-${subjectName}`}
                         onClick={(e) => {
                           e.stopPropagation();
+                          e.preventDefault();
                           handlePromptDeleteSubject(subjectName, totalSubjectNotes);
                         }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
                         className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-rose-100 dark:hover:bg-rose-950/50 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 transition-all cursor-pointer"
                         title={`Delete subject "${subjectName}"`}
                         aria-label={`Delete subject ${subjectName}`}
@@ -730,7 +734,10 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                           <div key={topicName} className="space-y-0.5">
                             {/* Topic Header Row (Clicking opens its list of notes) */}
                             <div
-                              onClick={() => handleToggleTopic(subjectName, topicName)}
+                              onClick={(e) => {
+                                if ((e.target as HTMLElement).closest('button, form, input')) return;
+                                handleToggleTopic(subjectName, topicName);
+                              }}
                               className={`flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer group transition-all text-xs ${
                                 isCurrentActiveTopic
                                   ? 'bg-purple-50 dark:bg-purple-950/40 text-[#7F56D9] dark:text-purple-300 font-medium'
@@ -789,8 +796,11 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                                     id={`delete-topic-btn-${subjectName}-${topicName}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      e.preventDefault();
                                       handlePromptDeleteTopic(subjectName, topicName, notesInTopic.length);
                                     }}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onPointerDown={(e) => e.stopPropagation()}
                                     className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-rose-100 dark:hover:bg-rose-950/50 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 transition-all cursor-pointer"
                                     title={`Delete topic "${topicName}"`}
                                     aria-label={`Delete topic ${topicName}`}
@@ -848,7 +858,11 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                                     return (
                                       <div
                                         key={note.id}
-                                        onClick={() => {
+                                        onClick={(e) => {
+                                          const target = e.target as HTMLElement;
+                                          if (target.closest('button, form, input')) {
+                                            return;
+                                          }
                                           if (isThisActive && !isEditingThisNote) {
                                             handleStartRename(note);
                                           } else if (!isThisActive) {
@@ -930,32 +944,43 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                                                 id={`delete-note-btn-${note.id}`}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
+                                                  e.preventDefault();
                                                   handlePromptDeleteNote(note);
                                                 }}
-                                                className={`p-0.5 rounded transition-all cursor-pointer ${
+                                                onMouseDown={(e) => e.stopPropagation()}
+                                                onPointerDown={(e) => e.stopPropagation()}
+                                                className={`p-1 rounded-md transition-all cursor-pointer flex items-center justify-center shrink-0 ${
                                                   isThisActive
-                                                    ? 'opacity-80 hover:opacity-100 text-white/80 hover:text-white hover:bg-rose-500/40'
-                                                    : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-950/50'
+                                                    ? 'text-white/80 hover:text-white hover:bg-rose-500/50'
+                                                    : 'text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-950/60 opacity-60 group-hover:opacity-100'
                                                 }`}
-                                                title="Delete note"
-                                                aria-label="Delete note"
+                                                title={`Delete "${note.title || 'Untitled note'}"`}
+                                                aria-label={`Delete "${note.title || 'Untitled note'}"`}
                                               >
-                                                <Trash2 className="w-3 h-3" />
+                                                <Trash2 className="w-3.5 h-3.5" />
                                               </button>
                                             )}
 
                                             {/* Rename button on hover or active */}
                                             <button
                                               type="button"
-                                              onClick={(e) => handleStartRename(note, e)}
-                                              className={`p-0.5 rounded transition-opacity cursor-pointer ${
+                                              id={`rename-note-btn-${note.id}`}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                e.preventDefault();
+                                                handleStartRename(note, e);
+                                              }}
+                                              onMouseDown={(e) => e.stopPropagation()}
+                                              onPointerDown={(e) => e.stopPropagation()}
+                                              className={`p-1 rounded-md transition-opacity cursor-pointer flex items-center justify-center shrink-0 ${
                                                 isThisActive
                                                   ? 'opacity-80 hover:opacity-100 text-white hover:bg-white/20'
                                                   : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-[#7F56D9] hover:bg-purple-100 dark:hover:bg-zinc-700'
                                               }`}
                                               title="Rename note"
+                                              aria-label="Rename note"
                                             >
-                                              <Pencil className="w-3 h-3" />
+                                              <Pencil className="w-3.5 h-3.5" />
                                             </button>
 
                                             {/* Favorite Star */}
