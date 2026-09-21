@@ -165,6 +165,24 @@ export default function App() {
     }
   });
 
+  // Deleted subjects blacklist to allow deleting default/hardcoded subjects
+  const [deletedSubjects, setDeletedSubjects] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('ns_deleted_subjects');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ns_deleted_subjects', JSON.stringify(deletedSubjects));
+    } catch {
+      // ignore
+    }
+  }, [deletedSubjects]);
+
   const handleUpdateSubjectsOrder = (newOrder: string[]) => {
     setSubjectsOrder(newOrder);
     try {
@@ -351,6 +369,7 @@ export default function App() {
     const trimmed = subjectName.trim();
     if (!trimmed) return;
 
+    setDeletedSubjects((prev) => prev.filter((s) => s.toLowerCase() !== trimmed.toLowerCase()));
     if (!customSubjects.includes(trimmed)) {
       setCustomSubjects((prev) => [...prev, trimmed]);
     }
@@ -414,18 +433,97 @@ export default function App() {
     setConfirmModal((prev) => ({ ...prev, isOpen: false }));
   };
 
-  // Note deletion
-  const executeDeleteActiveNote = () => {
-    const remaining = notes.filter((n) => n.id !== activeNote.id);
+  // Note deletion by ID
+  const handleDeleteNoteById = (noteId: string) => {
+    const remaining = notes.filter((n) => n.id !== noteId);
     if (remaining.length === 0) {
       const fallback = { ...INITIAL_NOTE, id: `note_${Date.now()}`, title: 'New note' };
       setNotes([fallback]);
       setActiveNoteId(fallback.id);
     } else {
       setNotes(remaining);
-      setActiveNoteId(remaining[0].id);
+      if (activeNoteId === noteId) {
+        setActiveNoteId(remaining[0].id);
+      }
     }
     closeConfirmModal();
+  };
+
+  const executeDeleteActiveNote = () => {
+    handleDeleteNoteById(activeNote.id);
+  };
+
+  // Delete Topic under a Subject
+  const handleDeleteTopic = (subjectName: string, topicName: string) => {
+    const remainingNotes = notes.filter(
+      (n) =>
+        !(
+          (n.subject || '').toLowerCase() === subjectName.toLowerCase() &&
+          (n.topic || '').toLowerCase() === topicName.toLowerCase()
+        )
+    );
+    if (remainingNotes.length === 0) {
+      const fallback = {
+        ...INITIAL_NOTE,
+        id: `note_${Date.now()}`,
+        title: 'New note',
+        subject: subjectName,
+        topic: 'General',
+      };
+      setNotes([fallback]);
+      setActiveNoteId(fallback.id);
+    } else {
+      setNotes(remainingNotes);
+      if (
+        (activeNote.subject || '').toLowerCase() === subjectName.toLowerCase() &&
+        (activeNote.topic || '').toLowerCase() === topicName.toLowerCase()
+      ) {
+        const sameSubjectNote = remainingNotes.find(
+          (n) => (n.subject || '').toLowerCase() === subjectName.toLowerCase()
+        );
+        setActiveNoteId(sameSubjectNote ? sameSubjectNote.id : remainingNotes[0].id);
+      }
+    }
+    if (
+      activeTopicCanvas?.subject?.toLowerCase() === subjectName.toLowerCase() &&
+      activeTopicCanvas?.topic?.toLowerCase() === topicName.toLowerCase()
+    ) {
+      setActiveTopicCanvas(null);
+    }
+  };
+
+  // Delete entire Subject
+  const handleDeleteSubject = (subjectName: string) => {
+    const remainingNotes = notes.filter(
+      (n) => (n.subject || '').toLowerCase() !== subjectName.toLowerCase()
+    );
+    if (remainingNotes.length === 0) {
+      const fallback = {
+        ...INITIAL_NOTE,
+        id: `note_${Date.now()}`,
+        title: 'New note',
+        subject: 'General',
+        topic: 'General',
+      };
+      setNotes([fallback]);
+      setActiveNoteId(fallback.id);
+    } else {
+      setNotes(remainingNotes);
+      if ((activeNote.subject || '').toLowerCase() === subjectName.toLowerCase()) {
+        setActiveNoteId(remainingNotes[0].id);
+      }
+    }
+    setCustomSubjects((prev) => prev.filter((s) => s.toLowerCase() !== subjectName.toLowerCase()));
+    setDeletedSubjects((prev) => {
+      if (!prev.some((s) => s.toLowerCase() === subjectName.toLowerCase())) {
+        return [...prev, subjectName];
+      }
+      return prev;
+    });
+    setSubjectsOrder((prev) => prev.filter((s) => s.toLowerCase() !== subjectName.toLowerCase()));
+    if (activeTopicCanvas?.subject?.toLowerCase() === subjectName.toLowerCase()) {
+      setActiveTopicCanvas(null);
+    }
   };
 
   const handleDeleteActiveNote = () => {
@@ -847,6 +945,14 @@ export default function App() {
       ...customSubjects,
       'dbms',
     ]);
+    deletedSubjects.forEach((del) => {
+      rawSet.delete(del);
+      Array.from(rawSet).forEach((item) => {
+        if (item.toLowerCase() === del.toLowerCase()) {
+          rawSet.delete(item);
+        }
+      });
+    });
     const rawList = Array.from(rawSet);
 
     if (subjectsOrder.length > 0) {
@@ -866,7 +972,7 @@ export default function App() {
       return ordered;
     }
     return rawList.sort();
-  }, [notes, customSubjects, subjectsOrder]);
+  }, [notes, customSubjects, subjectsOrder, deletedSubjects]);
 
   const allTopicsForSubject = Array.from(
     new Set(
@@ -994,6 +1100,9 @@ export default function App() {
                 handleAddSubject(subjectName, initialTopic, true);
                 setActiveTopicCanvas(null);
               }}
+              onDeleteSubject={handleDeleteSubject}
+              onDeleteTopic={handleDeleteTopic}
+              onDeleteNote={handleDeleteNoteById}
               onUpdateActiveNoteSubject={(newSubject) => {
                 updateActiveNote({ subject: newSubject });
                 setSettings((s) => ({ ...s, lastSubject: newSubject }));

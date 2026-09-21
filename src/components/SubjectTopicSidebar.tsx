@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { NoteItem } from '../types';
 import { getSubjectTheme } from '../utils/subjectThemes';
+import { ConfirmModal } from './ConfirmModal';
 
 interface SubjectTopicSidebarProps {
   notes: NoteItem[];
@@ -32,6 +33,8 @@ interface SubjectTopicSidebarProps {
   onSelectNote: (noteId: string) => void;
   onCreateNote: (subject?: string, topic?: string) => void;
   onAddSubject: (subjectName: string, initialTopic?: string) => void;
+  onDeleteSubject?: (subjectName: string) => void;
+  onDeleteTopic?: (subjectName: string, topicName: string) => void;
   onUpdateActiveNoteSubject: (newSubject: string) => void;
   onUpdateActiveNoteTopic: (newTopic: string) => void;
   onRenameNote?: (noteId: string, newTitle: string) => void;
@@ -55,6 +58,8 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
   onSelectNote,
   onCreateNote,
   onAddSubject,
+  onDeleteSubject,
+  onDeleteTopic,
   onUpdateActiveNoteSubject,
   onUpdateActiveNoteTopic,
   onRenameNote,
@@ -225,6 +230,80 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
 
   const handleCancelRename = () => {
     setEditingNoteId(null);
+  };
+
+  // Confirmation modal state for deleting subjects, topics, or notes
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Delete',
+    onConfirm: () => {},
+  });
+
+  const closeConfirmModal = () => {
+    setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const handlePromptDeleteSubject = (subName: string, totalNotes: number) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Subject',
+      message:
+        totalNotes > 0
+          ? `Are you sure you want to delete "${subName}"? This will permanently delete ${totalNotes} note${
+              totalNotes === 1 ? '' : 's'
+            } and all topics within this subject.`
+          : `Are you sure you want to delete the subject "${subName}"?`,
+      confirmLabel: 'Delete Subject',
+      onConfirm: () => {
+        closeConfirmModal();
+        if (onDeleteSubject) {
+          onDeleteSubject(subName);
+        }
+      },
+    });
+  };
+
+  const handlePromptDeleteTopic = (subName: string, topName: string, notesCount: number) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Topic',
+      message:
+        notesCount > 0
+          ? `Are you sure you want to delete "${topName}" under ${subName}? This will permanently delete ${notesCount} note${
+              notesCount === 1 ? '' : 's'
+            } inside this topic.`
+          : `Are you sure you want to delete the topic "${topName}"?`,
+      confirmLabel: 'Delete Topic',
+      onConfirm: () => {
+        closeConfirmModal();
+        if (onDeleteTopic) {
+          onDeleteTopic(subName, topName);
+        }
+      },
+    });
+  };
+
+  const handlePromptDeleteNote = (note: NoteItem) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Note',
+      message: `Are you sure you want to delete "${note.title || 'Untitled note'}"? This action cannot be undone.`,
+      confirmLabel: 'Delete Note',
+      onConfirm: () => {
+        closeConfirmModal();
+        if (onDeleteNote) {
+          onDeleteNote(note.id);
+        }
+      },
+    });
   };
 
   // Keep selected subject and topic in sync when activeNote changes
@@ -547,7 +626,7 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <div className="flex items-center gap-1 shrink-0 ml-2">
                     {/* Badge showing topic count */}
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 font-medium">
                       {topics.length} {topics.length === 1 ? 'topic' : 'topics'}
@@ -566,6 +645,23 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
+
+                    {/* Delete subject button (Yellow highlight area) */}
+                    {onDeleteSubject && (
+                      <button
+                        type="button"
+                        id={`delete-subject-btn-${subjectName}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePromptDeleteSubject(subjectName, totalSubjectNotes);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-rose-100 dark:hover:bg-rose-950/50 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 transition-all cursor-pointer"
+                        title={`Delete subject "${subjectName}"`}
+                        aria-label={`Delete subject ${subjectName}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -685,6 +781,23 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
                                 >
                                   <Plus className="w-3 h-3" />
                                 </button>
+
+                                {/* Delete topic button (Yellow highlight area) */}
+                                {onDeleteTopic && (
+                                  <button
+                                    type="button"
+                                    id={`delete-topic-btn-${subjectName}-${topicName}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handlePromptDeleteTopic(subjectName, topicName, notesInTopic.length);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-rose-100 dark:hover:bg-rose-950/50 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 transition-all cursor-pointer"
+                                    title={`Delete topic "${topicName}"`}
+                                    aria-label={`Delete topic ${topicName}`}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
                               </div>
                             </div>
 
@@ -810,6 +923,27 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
 
                                         {!isEditingThisNote && (
                                           <div className="flex items-center gap-1 shrink-0 ml-1.5">
+                                            {/* Delete Note button (Yellow highlight area) */}
+                                            {onDeleteNote && (
+                                              <button
+                                                type="button"
+                                                id={`delete-note-btn-${note.id}`}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handlePromptDeleteNote(note);
+                                                }}
+                                                className={`p-0.5 rounded transition-all cursor-pointer ${
+                                                  isThisActive
+                                                    ? 'opacity-80 hover:opacity-100 text-white/80 hover:text-white hover:bg-rose-500/40'
+                                                    : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-950/50'
+                                                }`}
+                                                title="Delete note"
+                                                aria-label="Delete note"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            )}
+
                                             {/* Rename button on hover or active */}
                                             <button
                                               type="button"
@@ -897,6 +1031,18 @@ export const SubjectTopicSidebar: React.FC<SubjectTopicSidebarProps> = ({
           <span>{activeNote.topic || 'General'}</span>
         </div>
       </div>
+
+      {/* Confirmation Modal for Deleting Subjects, Topics, or Notes */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmLabel={confirmModal.confirmLabel}
+        confirmVariant="danger"
+        onConfirm={confirmModal.onConfirm}
+        onCancel={closeConfirmModal}
+        darkMode={darkMode}
+      />
     </aside>
   );
 };
