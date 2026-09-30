@@ -69,6 +69,7 @@ export interface DrawingStroke {
 
 export interface PdfDocumentPage {
   pageNumber: number;
+  originalPageNumber?: number;
   dataUrl: string;
   width: number;
   height: number;
@@ -80,6 +81,8 @@ export interface PdfDocumentData {
   totalPages: number;
   pages: PdfDocumentPage[];
   uploadedAt?: number;
+  selectedRanges?: string;
+  originalTotalPages?: number;
 }
 
 export interface NoteTextBox {

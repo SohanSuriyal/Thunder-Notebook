@@ -21,7 +21,8 @@ import { StudyTimerProvider } from './context/StudyTimerContext';
 import { GoalsProvider } from './context/GoalsContext';
 import { GoalsView } from './components/GoalsView';
 import { StaticHeaderTimer } from './components/StaticHeaderTimer';
-import { renderPdfPages } from './utils/pdfLoader';
+import { renderPdfPages, getPdfMetadata } from './utils/pdfLoader';
+import { PdfPageRangeModal, PdfImportRequest } from './components/PdfPageRangeModal';
 import { saveNotesToStorage, loadNotesFromStorage, loadNoteFromStorage } from './utils/storage';
 import { loadBrandingSettings, DEFAULT_THUNDER_CHARACTER } from './components/BrandingSettings';
 
@@ -248,6 +249,14 @@ export default function App() {
   useEffect(() => {
     saveNotesToStorage(notes);
   }, [notes]);
+
+  const [pdfImportModal, setPdfImportModal] = useState<{
+    isOpen: boolean;
+    importRequest: PdfImportRequest | null;
+  }>({
+    isOpen: false,
+    importRequest: null,
+  });
 
   useEffect(() => {
     try {
@@ -928,13 +937,23 @@ export default function App() {
   // PDF Handlers
   const handleInsertPdfFile = async (file: File) => {
     try {
-      const pdfData = await renderPdfPages(file);
-      updateActiveNote({ pdfData });
-      setIsSaved(false);
-      setTimeout(() => setIsSaved(true), 500);
+      const meta = await getPdfMetadata(file);
+      setPdfImportModal({
+        isOpen: true,
+        importRequest: { file, totalPages: meta.totalPages },
+      });
     } catch (err) {
-      console.error('Error rendering PDF:', err);
-      alert('Failed to parse PDF file. Please ensure it is a valid PDF document.');
+      console.error('Error reading PDF metadata:', err);
+      // Fallback: render directly
+      try {
+        const pdfData = await renderPdfPages(file);
+        updateActiveNote({ pdfData });
+        setIsSaved(false);
+        setTimeout(() => setIsSaved(true), 500);
+      } catch (e) {
+        console.error('Failed to parse PDF:', e);
+        alert('Failed to parse PDF file. Please ensure it is a valid PDF document.');
+      }
     }
   };
 
@@ -1393,6 +1412,19 @@ export default function App() {
         confirmVariant={confirmModal.confirmVariant}
         onConfirm={confirmModal.onConfirm}
         onCancel={closeConfirmModal}
+        darkMode={darkMode}
+      />
+
+      {/* PDF Page Range Selection Modal */}
+      <PdfPageRangeModal
+        isOpen={pdfImportModal.isOpen}
+        onClose={() => setPdfImportModal({ isOpen: false, importRequest: null })}
+        importRequest={pdfImportModal.importRequest}
+        onImportComplete={(pdfData) => {
+          updateActiveNote({ pdfData });
+          setIsSaved(false);
+          setTimeout(() => setIsSaved(true), 500);
+        }}
         darkMode={darkMode}
       />
       </div>

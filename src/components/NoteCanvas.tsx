@@ -20,8 +20,19 @@ import {
   X,
   AlertCircle,
   Plus,
+  Sliders,
+  ChevronLeft,
+  ChevronRight,
+  Scroll,
+  Maximize2,
+  Sparkles,
 } from 'lucide-react';
-import { renderPdfPages } from '../utils/pdfLoader';
+import { renderPdfPages, getPdfMetadata } from '../utils/pdfLoader';
+import {
+  PdfPageRangeModal,
+  PdfImportRequest,
+  PdfManageRequest,
+} from './PdfPageRangeModal';
 
 function getDrawingCursor(tool: DrawingTool, eraserType: EraserType, thickness: number): string {
   let svg: string;
@@ -286,6 +297,132 @@ function renderStrokeToContext(ctx: CanvasRenderingContext2D, stroke: DrawingStr
   ctx.restore();
 }
 
+interface LazyPdfPageItemProps {
+  page: PdfDocumentData['pages'][0];
+  totalPages: number;
+  pdfZoom: number;
+  pageDeleteConfirm: number | null;
+  onConfirmDelete: (pageNum: number) => void;
+  onSetConfirmDelete: (pageNum: number | null) => void;
+  darkMode?: boolean;
+}
+
+const LazyPdfPageItem: React.FC<LazyPdfPageItemProps> = ({
+  page,
+  totalPages,
+  pdfZoom,
+  pageDeleteConfirm,
+  onConfirmDelete,
+  onSetConfirmDelete,
+  darkMode = false,
+}) => {
+  const [isVisible, setIsVisible] = useState(false);
+  const itemRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = itemRef.current;
+    if (!el) return;
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              setIsVisible(true);
+              observer.unobserve(entry.target);
+            }
+          });
+        },
+        { rootMargin: '800px 0px' }
+      );
+      observer.observe(el);
+      return () => observer.disconnect();
+    } else {
+      setIsVisible(true);
+    }
+  }, []);
+
+  const aspectRatio = page.width && page.height ? page.height / page.width : 1.414;
+
+  return (
+    <div
+      ref={itemRef}
+      id={`pdf-page-${page.pageNumber}`}
+      data-page-number={page.pageNumber}
+      className={`relative rounded-2xl overflow-hidden shadow-md border transition-all group ${
+        darkMode ? 'border-zinc-700 bg-zinc-800' : 'border-gray-200 bg-white'
+      }`}
+      style={{
+        width: `${pdfZoom}%`,
+        maxWidth: '100%',
+        minHeight: isVisible ? undefined : `${aspectRatio * 500}px`,
+      }}
+    >
+      {isVisible ? (
+        <img
+          src={page.dataUrl}
+          alt={`Page ${page.pageNumber}`}
+          className="w-full h-auto block select-none pointer-events-none"
+          draggable={false}
+          loading="lazy"
+          decoding="async"
+        />
+      ) : (
+        <div
+          className={`w-full flex flex-col items-center justify-center py-28 ${
+            darkMode ? 'bg-zinc-800 text-zinc-400' : 'bg-gray-50 text-gray-400'
+          }`}
+          style={{ aspectRatio: `${page.width} / ${page.height}` }}
+        >
+          <div className="w-8 h-8 rounded-full border-2 border-purple-400 border-t-transparent animate-spin mb-2" />
+          <span className="text-xs font-semibold">Page {page.pageNumber}...</span>
+        </div>
+      )}
+
+      {/* Floating Page Badge & Delete Action */}
+      <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10 no-create-box">
+        <span className="px-2.5 py-1 rounded-md bg-black/75 backdrop-blur-xs text-white text-[11px] font-semibold shadow-xs">
+          Page {page.pageNumber} of {totalPages}
+          {page.originalPageNumber && page.originalPageNumber !== page.pageNumber && (
+            <span className="text-gray-300 ml-1 font-normal font-mono text-[10px]">
+              (Doc #{page.originalPageNumber})
+            </span>
+          )}
+        </span>
+
+        {pageDeleteConfirm === page.pageNumber ? (
+          <div className="flex items-center gap-1 bg-red-600 text-white rounded-md p-0.5 shadow-md animate-in fade-in">
+            <span className="text-[10px] font-bold px-1">Delete page?</span>
+            <button
+              type="button"
+              onClick={() => onConfirmDelete(page.pageNumber)}
+              className="px-1.5 py-0.5 rounded bg-white text-red-600 font-bold text-[10px] hover:bg-red-50"
+            >
+              Yes
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetConfirmDelete(null)}
+              className="px-1 py-0.5 text-[10px] hover:text-white/80"
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSetConfirmDelete(page.pageNumber)}
+            title={`Delete Page ${page.pageNumber}`}
+            className="p-1.5 rounded-md bg-black/60 hover:bg-red-600 text-white transition-colors opacity-80 hover:opacity-100 shadow-xs"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 interface NoteCanvasProps {
   contentHtml: string;
   onContentChange: (newHtml: string) => void;
@@ -342,6 +479,15 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
   const [selectedPdfPageToDelete, setSelectedPdfPageToDelete] = useState<number>(1);
   const [pageDeleteConfirm, setPageDeleteConfirm] = useState<number | null>(null);
   const [dismissedPdfPrompt, setDismissedPdfPrompt] = useState(false);
+
+  // High page count optimization & range selection states
+  const [pdfViewMode, setPdfViewMode] = useState<'continuous' | 'single'>('continuous');
+  const [currentActivePdfPage, setCurrentActivePdfPage] = useState<number>(1);
+  const [rangeDeleteFrom, setRangeDeleteFrom] = useState<number>(1);
+  const [rangeDeleteTo, setRangeDeleteTo] = useState<number>(1);
+  const [isRangeModalOpen, setIsRangeModalOpen] = useState<boolean>(false);
+  const [importRequest, setImportRequest] = useState<PdfImportRequest | null>(null);
+  const [manageRequest, setManageRequest] = useState<PdfManageRequest | null>(null);
 
   const getInitialBoxes = (): NoteTextBox[] => {
     if (propTextBoxes && propTextBoxes.length > 0) {
@@ -434,11 +580,19 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
       if (b.y + 400 > maxY) maxY = b.y + 400;
     });
     if (pdfData && pdfData.pages.length > 0) {
-      const estimatedPdfHeight = pdfData.pages.length * 1150 * (pdfZoom / 100) + 200;
-      if (estimatedPdfHeight > maxY) maxY = estimatedPdfHeight;
+      if (pdfViewMode === 'single') {
+        const activePage = pdfData.pages[currentActivePdfPage - 1] || pdfData.pages[0];
+        const estH = activePage
+          ? (activePage.height / (activePage.width || 800)) * 800 * (pdfZoom / 100) + 300
+          : 1200;
+        if (estH > maxY) maxY = estH;
+      } else {
+        const estimatedPdfHeight = pdfData.pages.length * 1150 * (pdfZoom / 100) + 200;
+        if (estimatedPdfHeight > maxY) maxY = estimatedPdfHeight;
+      }
     }
     return maxY;
-  }, [boxes, pdfData, pdfZoom]);
+  }, [boxes, pdfData, pdfZoom, pdfViewMode, currentActivePdfPage]);
 
   const updateCanvasDimensions = useCallback(() => {
     const wrapper = contentWrapperRef.current;
@@ -454,10 +608,14 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
     const height = maxY;
 
     const dpr = window.devicePixelRatio || 1;
+    // Guard against browser maximum canvas backing store overflow in Chromium/WebKit (16,384px)
+    const maxSafeHeight = Math.floor(16380 / dpr);
+    const safeHeight = Math.min(height, maxSafeHeight);
+
     canvas.width = width * dpr;
-    canvas.height = height * dpr;
+    canvas.height = safeHeight * dpr;
     canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
+    canvas.style.height = `${safeHeight}px`;
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
@@ -481,7 +639,7 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
       ro.disconnect();
       window.removeEventListener('resize', updateCanvasDimensions);
     };
-  }, [updateCanvasDimensions, pdfData, pdfZoom, boxes]);
+  }, [updateCanvasDimensions, pdfData, pdfZoom, boxes, pdfViewMode, currentActivePdfPage]);
 
   useEffect(() => {
     redrawAllStrokes();
@@ -855,12 +1013,34 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
         onPdfDataChange(processed);
       }
       setSelectedPdfPageToDelete(1);
+      setCurrentActivePdfPage(1);
     } catch (err) {
       console.error('Failed to parse PDF file:', err);
     } finally {
       setIsLoadingPdf(false);
       setPdfProgress(null);
     }
+  };
+
+  const handlePdfUpload = async (file: File) => {
+    try {
+      setIsLoadingPdf(true);
+      const meta = await getPdfMetadata(file);
+      setIsLoadingPdf(false);
+      setImportRequest({ file, totalPages: meta.totalPages });
+      setManageRequest(null);
+      setIsRangeModalOpen(true);
+    } catch (err) {
+      console.error('Failed to inspect PDF metadata:', err);
+      processPdfFile(file);
+    }
+  };
+
+  const handleOpenPageManager = () => {
+    if (!pdfData) return;
+    setManageRequest({ currentPdf: pdfData });
+    setImportRequest(null);
+    setIsRangeModalOpen(true);
   };
 
   const handleDeleteSinglePdfPage = (pageNumberToDelete: number) => {
@@ -892,6 +1072,38 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
     setShowPdfDeleteMenu(false);
     setPageDeleteConfirm(null);
     setSelectedPdfPageToDelete((prev) => Math.min(prev, reindexed.length));
+    setCurrentActivePdfPage((prev) => Math.min(prev, reindexed.length));
+  };
+
+  const handleDeletePageRange = (from: number, to: number) => {
+    if (!pdfData) return;
+    const start = Math.min(from, to);
+    const end = Math.max(from, to);
+    const remainingPages = pdfData.pages.filter((p) => p.pageNumber < start || p.pageNumber > end);
+
+    if (remainingPages.length === 0) {
+      if (onPdfDataChange) onPdfDataChange(undefined);
+      setShowPdfDeleteMenu(false);
+      return;
+    }
+
+    const reindexed = remainingPages.map((p, idx) => ({
+      ...p,
+      pageNumber: idx + 1,
+    }));
+
+    const updatedPdf: PdfDocumentData = {
+      ...pdfData,
+      totalPages: reindexed.length,
+      pages: reindexed,
+    };
+
+    if (onPdfDataChange) {
+      onPdfDataChange(updatedPdf);
+    }
+    setShowPdfDeleteMenu(false);
+    setCurrentActivePdfPage((prev) => Math.min(prev, reindexed.length));
+    setSelectedPdfPageToDelete(1);
   };
 
   const handleDeleteAllPdfPages = () => {
@@ -900,6 +1112,18 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
     }
     setShowPdfDeleteMenu(false);
     setPageDeleteConfirm(null);
+  };
+
+  const handleJumpToPage = (pageNum: number) => {
+    if (!pdfData) return;
+    const page = Math.max(1, Math.min(pageNum, pdfData.totalPages));
+    setCurrentActivePdfPage(page);
+    if (pdfViewMode === 'continuous') {
+      const el = document.getElementById(`pdf-page-${page}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -920,7 +1144,7 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
       if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        processPdfFile(file);
+        handlePdfUpload(file);
       }
     }
   };
@@ -982,195 +1206,320 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
         {pdfData && pdfData.pages.length > 0 && (
           <div className="pdf-container relative z-10 max-w-4xl mx-auto mb-10 select-none">
             <div
-              className={`pdf-header-controls no-create-box flex flex-col sm:flex-row sm:items-center justify-between p-3.5 mb-5 rounded-2xl border transition-colors shadow-2xs gap-3 ${
+              className={`pdf-header-controls no-create-box flex flex-col p-3.5 mb-5 rounded-2xl border transition-colors shadow-2xs gap-3 ${
                 darkMode
                   ? 'bg-zinc-800/90 border-zinc-700 text-zinc-100'
                   : 'bg-gray-50/95 border-gray-200 text-gray-800'
               }`}
             >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center flex-shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div className="truncate">
-                  <div className={`text-sm font-bold truncate ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                    {pdfData.fileName}
+              {/* Row 1: Document details & Primary Actions */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-5 h-5" />
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-zinc-400 flex items-center gap-2">
-                    <span className="font-semibold text-purple-600 dark:text-purple-400">
-                      {pdfData.totalPages} {pdfData.totalPages === 1 ? 'page' : 'pages'}
+                  <div className="truncate">
+                    <div className={`text-sm font-bold truncate ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {pdfData.fileName}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-zinc-400 flex items-center flex-wrap gap-1.5">
+                      <span className="font-semibold text-purple-600 dark:text-purple-400">
+                        {pdfData.totalPages} {pdfData.totalPages === 1 ? 'page' : 'pages'}
+                      </span>
+                      {pdfData.originalTotalPages && pdfData.originalTotalPages > pdfData.totalPages && (
+                        <span className="text-[11px] px-1.5 py-0.2 rounded-md bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-medium">
+                          Range: {pdfData.selectedRanges || `selected from ${pdfData.originalTotalPages}`}
+                        </span>
+                      )}
+                      <span>•</span>
+                      <span>{(pdfData.fileSize / 1024).toFixed(0)} KB</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right toolbar controls */}
+                <div className="flex items-center flex-wrap gap-2 flex-shrink-0">
+                  {/* Select / Manage Pages Range Button */}
+                  <button
+                    type="button"
+                    onClick={handleOpenPageManager}
+                    title="Select, filter, or delete page ranges in this note"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors shadow-2xs"
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>Select Pages & Ranges</span>
+                  </button>
+
+                  {/* Draw on PDF Button */}
+                  <button
+                    type="button"
+                    onClick={() => onToggleDrawing && onToggleDrawing()}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-2xs ${
+                      isDrawingMode
+                        ? 'bg-[#7F56D9] text-white'
+                        : darkMode
+                        ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
+                        : 'bg-white hover:bg-purple-50 text-[#7F56D9] border border-purple-200'
+                    }`}
+                  >
+                    <PenTool className="w-3.5 h-3.5" />
+                    <span>{isDrawingMode ? 'Drawing Active' : 'Draw on PDF'}</span>
+                  </button>
+
+                  {/* Zoom controls */}
+                  <div className="flex items-center rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPdfZoom((z) => Math.max(60, z - 15))}
+                      title="Zoom out PDF"
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded text-gray-600 dark:text-zinc-300"
+                    >
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[11px] font-bold px-1.5 min-w-[38px] text-center text-gray-700 dark:text-zinc-300">
+                      {pdfZoom}%
                     </span>
-                    <span>•</span>
-                    <span>{(pdfData.fileSize / 1024).toFixed(0)} KB</span>
-                    <span>•</span>
-                    <span>Write & draw anywhere over pages</span>
+                    <button
+                      type="button"
+                      onClick={() => setPdfZoom((z) => Math.min(140, z + 15))}
+                      title="Zoom in PDF"
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded text-gray-600 dark:text-zinc-300"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Delete menu container */}
+                  <div className="relative inline-block" id="pdf-delete-menu-container">
+                    <button
+                      id="pdf-delete-options-trigger"
+                      type="button"
+                      onClick={() => setShowPdfDeleteMenu(!showPdfDeleteMenu)}
+                      title="Delete PDF pages..."
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/50 transition-colors shadow-2xs"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete PDF...</span>
+                    </button>
+
+                    {showPdfDeleteMenu && (
+                      <div
+                        className={`absolute right-0 top-9 z-50 w-80 p-3.5 rounded-2xl border shadow-xl animate-in fade-in zoom-in-95 ${
+                          darkMode
+                            ? 'bg-zinc-800 border-zinc-700 text-zinc-100'
+                            : 'bg-white border-gray-200 text-gray-800'
+                        }`}
+                      >
+                        <div className="text-xs font-bold text-gray-900 dark:text-white mb-2 pb-1.5 border-b border-gray-100 dark:border-zinc-700">
+                          Delete PDF Options
+                        </div>
+
+                        {/* 1. Delete single page */}
+                        <div className="p-2.5 rounded-xl bg-gray-50 dark:bg-zinc-700/50 mb-2">
+                          <div className="text-xs font-semibold text-gray-800 dark:text-zinc-200 mb-1.5 flex items-center justify-between">
+                            <span>Delete Specific Page</span>
+                            <span className="text-[10px] text-gray-500">1 of {pdfData.totalPages}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={selectedPdfPageToDelete}
+                              onChange={(e) => setSelectedPdfPageToDelete(Number(e.target.value))}
+                              className="flex-1 px-2 py-1 text-xs rounded-lg border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-200"
+                            >
+                              {pdfData.pages.map((p) => (
+                                <option key={p.pageNumber} value={p.pageNumber}>
+                                  Page {p.pageNumber}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSinglePdfPage(selectedPdfPageToDelete)}
+                              className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium transition-colors"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 2. Delete range of pages */}
+                        <div className="p-2.5 rounded-xl bg-gray-50 dark:bg-zinc-700/50 mb-2.5">
+                          <div className="text-xs font-semibold text-gray-800 dark:text-zinc-200 mb-1.5">
+                            Delete Page Range
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] text-gray-500">From</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={pdfData.totalPages}
+                              value={rangeDeleteFrom}
+                              onChange={(e) => setRangeDeleteFrom(parseInt(e.target.value, 10) || 1)}
+                              className="w-12 px-1.5 py-1 text-xs text-center rounded border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                            />
+                            <span className="text-[11px] text-gray-500">To</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={pdfData.totalPages}
+                              value={rangeDeleteTo}
+                              onChange={(e) => setRangeDeleteTo(parseInt(e.target.value, 10) || pdfData.totalPages)}
+                              className="w-12 px-1.5 py-1 text-xs text-center rounded border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePageRange(rangeDeleteFrom, rangeDeleteTo)}
+                              className="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-xs font-semibold ml-auto transition-colors"
+                            >
+                              Delete Range
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 3. Delete all pages */}
+                        <button
+                          type="button"
+                          onClick={handleDeleteAllPdfPages}
+                          className="w-full flex items-center justify-between p-2 rounded-xl text-left bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 text-xs font-semibold transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete All Pages (Remove PDF)</span>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowPdfDeleteMenu(false)}
+                          className="w-full mt-2 text-center text-[11px] text-gray-500 hover:text-gray-700 dark:hover:text-zinc-300 py-1"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onToggleDrawing && onToggleDrawing()}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-2xs ${
-                    isDrawingMode
-                      ? 'bg-[#7F56D9] text-white'
-                      : darkMode
-                      ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
-                      : 'bg-white hover:bg-purple-50 text-[#7F56D9] border border-purple-200'
-                  }`}
-                >
-                  <PenTool className="w-3.5 h-3.5" />
-                  <span>{isDrawingMode ? 'Drawing Active' : 'Draw on PDF'}</span>
-                </button>
+              {/* Row 2: Page Navigation Bar & View Mode Switcher */}
+              <div
+                className={`pt-2.5 border-t flex flex-wrap items-center justify-between gap-3 text-xs ${
+                  darkMode ? 'border-zinc-700/70 text-zinc-300' : 'border-gray-200/80 text-gray-700'
+                }`}
+              >
+                {/* Page Navigation & Jump */}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleJumpToPage(currentActivePdfPage - 1)}
+                      disabled={currentActivePdfPage <= 1}
+                      title="Previous page"
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-zinc-700 disabled:opacity-30 rounded text-gray-600 dark:text-zinc-300"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
 
-                <div className="flex items-center rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setPdfZoom((z) => Math.max(60, z - 15))}
-                    title="Zoom out PDF"
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded text-gray-600 dark:text-zinc-300"
-                  >
-                    <ZoomOut className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="text-[11px] font-bold px-1.5 min-w-[38px] text-center text-gray-700 dark:text-zinc-300">
-                    {pdfZoom}%
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPdfZoom((z) => Math.min(140, z + 15))}
-                    title="Zoom in PDF"
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded text-gray-600 dark:text-zinc-300"
-                  >
-                    <ZoomIn className="w-3.5 h-3.5" />
-                  </button>
+                    <div className="flex items-center px-2 gap-1.5 font-medium">
+                      <span>Page</span>
+                      <select
+                        value={currentActivePdfPage}
+                        onChange={(e) => handleJumpToPage(Number(e.target.value))}
+                        className="font-bold text-purple-600 dark:text-purple-400 bg-transparent outline-hidden cursor-pointer"
+                      >
+                        {pdfData.pages.map((p) => (
+                          <option key={p.pageNumber} value={p.pageNumber}>
+                            {p.pageNumber}
+                          </option>
+                        ))}
+                      </select>
+                      <span>of {pdfData.totalPages}</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleJumpToPage(currentActivePdfPage + 1)}
+                      disabled={currentActivePdfPage >= pdfData.totalPages}
+                      title="Next page"
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-zinc-700 disabled:opacity-30 rounded text-gray-600 dark:text-zinc-300"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {pdfData.totalPages > 10 && (
+                    <span className="text-[11px] text-gray-400 dark:text-zinc-500 hidden sm:inline">
+                      (Smooth 60fps virtualization active)
+                    </span>
+                  )}
                 </div>
 
-                <div className="relative inline-block" id="pdf-delete-menu-container">
-                  <button
-                    id="pdf-delete-options-trigger"
-                    type="button"
-                    onClick={() => setShowPdfDeleteMenu(!showPdfDeleteMenu)}
-                    title="Delete PDF pages..."
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/50 transition-colors shadow-2xs"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete PDF...</span>
-                  </button>
-
-                  {showPdfDeleteMenu && (
-                    <div
-                      className={`absolute right-0 top-9 z-50 w-72 p-3 rounded-2xl border shadow-xl animate-in fade-in zoom-in-95 ${
-                        darkMode
-                          ? 'bg-zinc-800 border-zinc-700 text-zinc-100'
-                          : 'bg-white border-gray-200 text-gray-800'
+                {/* View Mode Toggle: Continuous vs Single Page Focus */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-gray-500 dark:text-zinc-400">View:</span>
+                  <div className="flex items-center rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPdfViewMode('continuous')}
+                      title="Continuous Scroll Mode"
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                        pdfViewMode === 'continuous'
+                          ? 'bg-[#7F56D9] text-white shadow-2xs'
+                          : 'text-gray-600 dark:text-zinc-400 hover:text-gray-900'
                       }`}
                     >
-                      <div className="text-xs font-bold text-gray-900 dark:text-white mb-2 pb-1.5 border-b border-gray-100 dark:border-zinc-700">
-                        Delete PDF Options
-                      </div>
-
-                      <div className="p-2 rounded-xl bg-gray-50 dark:bg-zinc-700/50 mb-2.5">
-                        <div className="text-xs font-semibold text-gray-800 dark:text-zinc-200 mb-1.5 flex items-center justify-between">
-                          <span>Delete Selected Page</span>
-                          <span className="text-[10px] text-gray-500">1 of {pdfData.totalPages}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={selectedPdfPageToDelete}
-                            onChange={(e) => setSelectedPdfPageToDelete(Number(e.target.value))}
-                            className="flex-1 px-2 py-1 text-xs rounded-lg border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-200"
-                          >
-                            {pdfData.pages.map((p) => (
-                              <option key={p.pageNumber} value={p.pageNumber}>
-                                Page {p.pageNumber}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSinglePdfPage(selectedPdfPageToDelete)}
-                            className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium transition-colors"
-                          >
-                            Delete Page
-                          </button>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={handleDeleteAllPdfPages}
-                        className="w-full flex items-center justify-between p-2 rounded-xl text-left bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 text-xs font-semibold transition-colors"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Delete All Pages (Remove PDF)</span>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setShowPdfDeleteMenu(false)}
-                        className="w-full mt-2 text-center text-[11px] text-gray-500 hover:text-gray-700 dark:hover:text-zinc-300 py-1"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  )}
+                      <Scroll className="w-3 h-3" />
+                      <span>Continuous</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPdfViewMode('single')}
+                      title="Single Page Focus Mode"
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                        pdfViewMode === 'single'
+                          ? 'bg-[#7F56D9] text-white shadow-2xs'
+                          : 'text-gray-600 dark:text-zinc-400 hover:text-gray-900'
+                      }`}
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                      <span>Single Page</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
+            {/* Optimized PDF Pages Stack */}
             <div className="pdf-pages-stack flex flex-col items-center gap-6">
-              {pdfData.pages.map((page) => (
-                <div
-                  key={page.pageNumber}
-                  className="relative rounded-2xl overflow-hidden shadow-md border border-gray-200 dark:border-zinc-700 bg-white transition-all group"
-                  style={{ width: `${pdfZoom}%`, maxWidth: '100%' }}
-                >
-                  <img
-                    src={page.dataUrl}
-                    alt={`Page ${page.pageNumber}`}
-                    className="w-full h-auto block select-none pointer-events-none"
-                    draggable={false}
+              {pdfViewMode === 'single' ? (
+                // Single Page Mode: only renders active page
+                pdfData.pages[currentActivePdfPage - 1] ? (
+                  <LazyPdfPageItem
+                    key={pdfData.pages[currentActivePdfPage - 1].pageNumber}
+                    page={pdfData.pages[currentActivePdfPage - 1]}
+                    totalPages={pdfData.totalPages}
+                    pdfZoom={pdfZoom}
+                    pageDeleteConfirm={pageDeleteConfirm}
+                    onConfirmDelete={handleDeleteSinglePdfPage}
+                    onSetConfirmDelete={setPageDeleteConfirm}
+                    darkMode={darkMode}
                   />
-
-                  <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10">
-                    <span className="px-2.5 py-1 rounded-md bg-black/70 backdrop-blur-xs text-white text-[11px] font-medium shadow-xs">
-                      Page {page.pageNumber} of {pdfData.totalPages}
-                    </span>
-
-                    {pageDeleteConfirm === page.pageNumber ? (
-                      <div className="flex items-center gap-1 bg-red-600 text-white rounded-md p-0.5 shadow-md animate-in fade-in">
-                        <span className="text-[10px] font-bold px-1">Delete page?</span>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteSinglePdfPage(page.pageNumber)}
-                          className="px-1.5 py-0.5 rounded bg-white text-red-600 font-bold text-[10px] hover:bg-red-50"
-                        >
-                          Yes
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPageDeleteConfirm(null)}
-                          className="px-1 py-0.5 text-[10px] hover:text-white/80"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setPageDeleteConfirm(page.pageNumber)}
-                        title={`Delete Page ${page.pageNumber}`}
-                        className="p-1 rounded-md bg-black/60 hover:bg-red-600 text-white transition-colors opacity-80 hover:opacity-100"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                ) : null
+              ) : (
+                // Continuous Mode: renders all pages using LazyPdfPageItem (IntersectionObserver)
+                pdfData.pages.map((page) => (
+                  <LazyPdfPageItem
+                    key={page.pageNumber}
+                    page={page}
+                    totalPages={pdfData.totalPages}
+                    pdfZoom={pdfZoom}
+                    pageDeleteConfirm={pageDeleteConfirm}
+                    onConfirmDelete={handleDeleteSinglePdfPage}
+                    onSetConfirmDelete={setPageDeleteConfirm}
+                    darkMode={darkMode}
+                  />
+                ))
+              )}
             </div>
           </div>
         )}
@@ -1277,11 +1626,34 @@ export const NoteCanvas: React.FC<NoteCanvasProps> = ({
         accept="application/pdf"
         onChange={(e) => {
           if (e.target.files && e.target.files[0]) {
-            processPdfFile(e.target.files[0]);
+            handlePdfUpload(e.target.files[0]);
             e.target.value = '';
           }
         }}
         className="hidden"
+      />
+
+      {/* PDF Page Range Selection & Document Management Modal */}
+      <PdfPageRangeModal
+        isOpen={isRangeModalOpen}
+        onClose={() => {
+          setIsRangeModalOpen(false);
+          setImportRequest(null);
+          setManageRequest(null);
+        }}
+        importRequest={importRequest}
+        onImportComplete={(newPdf) => {
+          if (onPdfDataChange) onPdfDataChange(newPdf);
+          setSelectedPdfPageToDelete(1);
+          setCurrentActivePdfPage(1);
+        }}
+        manageRequest={manageRequest}
+        onManageComplete={(updatedPdf) => {
+          if (onPdfDataChange) onPdfDataChange(updatedPdf);
+          setSelectedPdfPageToDelete(1);
+          setCurrentActivePdfPage(1);
+        }}
+        darkMode={darkMode}
       />
     </div>
   );

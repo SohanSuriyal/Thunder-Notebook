@@ -183,9 +183,10 @@ export const NotePagePreview: React.FC<NotePagePreviewProps> = ({
       });
     }
 
-    // 3. PDF Pages
+    // 3. PDF Pages (limit preview to first 2 pages for high performance)
     if (note.pdfData && note.pdfData.pages.length > 0) {
-      const pdfEstimatedH = note.pdfData.pages.length * 1050 + 100;
+      const previewPageCount = Math.min(2, note.pdfData.pages.length);
+      const pdfEstimatedH = previewPageCount * 1050 + 100;
       if (pdfEstimatedH > maxY) maxY = pdfEstimatedH;
     }
 
@@ -299,22 +300,28 @@ export const NotePagePreview: React.FC<NotePagePreviewProps> = ({
             darkMode ? 'bg-[#18181b] border-zinc-800 text-zinc-100' : 'bg-white border-zinc-200 text-zinc-900'
           } ${paperClass}`}
         >
-          {/* 1. PDF Pages Stack (if embedded) */}
+          {/* 1. PDF Pages Stack (if embedded, optimized preview of up to 2 pages) */}
           {hasPdf && (
-            <div className="pdf-preview-stack flex flex-col items-center gap-6 pt-6 px-6 pointer-events-none">
-              {note.pdfData!.pages.map((page) => (
+            <div className="pdf-preview-stack flex flex-col items-center gap-4 pt-4 px-4 pointer-events-none">
+              {note.pdfData!.pages.slice(0, 2).map((page) => (
                 <div
                   key={page.pageNumber}
-                  className="w-full max-w-[720px] rounded-xl overflow-hidden shadow-sm border border-zinc-200 dark:border-zinc-700 bg-white"
+                  className="w-full max-w-[720px] rounded-xl overflow-hidden shadow-xs border border-zinc-200 dark:border-zinc-700 bg-white"
                 >
                   <img
                     src={page.dataUrl}
                     alt={`Page ${page.pageNumber}`}
                     className="w-full h-auto block"
                     draggable={false}
+                    loading="lazy"
                   />
                 </div>
               ))}
+              {note.pdfData!.pages.length > 2 && (
+                <div className="px-3 py-1 rounded-full bg-black/60 backdrop-blur-xs text-white text-[11px] font-semibold">
+                  +{note.pdfData!.pages.length - 2} more {note.pdfData!.pages.length - 2 === 1 ? 'page' : 'pages'}
+                </div>
+              )}
             </div>
           )}
 
