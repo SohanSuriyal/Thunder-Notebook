@@ -27,7 +27,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "category": "Education",
     "shortDescription": "A local desktop notebook for study and handwritten notes.",
     "longDescription": "Thunder Notebook is a desktop-first study notebook with subjects, topics, drawing, goals, favorites, timers, and PDF support.",
@@ -35,6 +37,7 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }
-    }
+    },
+    "icon": []
   }
 }
