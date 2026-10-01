@@ -1,6 +1,0 @@
-{
-  "name": "Thunder Notebook",
-  "description": "Clean, modern note-taking and drawing notebook application with responsive branding, subjects, topics, and handwriting canvas.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
