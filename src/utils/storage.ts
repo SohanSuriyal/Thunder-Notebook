@@ -254,3 +254,74 @@ export async function saveNotesToStorage(notes: NoteItem[]): Promise<void> {
     console.warn('IndexedDB cleanup failed:', err);
   }
 }
+
+
+/**
+ * Read the complete IndexedDB contents without modifying or deleting anything.
+ * Intended for recovery/backup tools.
+ */
+export async function exportStorageSnapshot(): Promise<{
+  database: string;
+  version: number;
+  notes: StoredNote[];
+  attachments: StoredAttachment[];
+  exportedAt: string;
+}> {
+  const db = await openDb();
+
+  const readAll = <T,>(storeName: string): Promise<T[]> =>
+    new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readonly');
+      const request = tx.objectStore(storeName).getAll();
+      request.onsuccess = () => resolve((request.result || []) as T[]);
+      request.onerror = () => reject(request.error);
+    });
+
+  try {
+    const [notes, attachments] = await Promise.all([
+      readAll<StoredNote>(NOTES_STORE),
+      readAll<StoredAttachment>(ATTACHMENTS_STORE),
+    ]);
+
+    return {
+      database: DB_NAME,
+      version: db.version,
+      notes,
+      attachments,
+      exportedAt: new Date().toISOString(),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+
+/**
+ * Restore a recovery snapshot by merging its records into IndexedDB.
+ * Existing records with the same IDs are replaced; unrelated records are preserved.
+ * This never performs the destructive cleanup used by saveNotesToStorage.
+ */
+export async function restoreStorageSnapshot(snapshot: {
+  notes: StoredNote[];
+  attachments?: StoredAttachment[];
+}): Promise<number> {
+  const db = await openDb();
+  const tx = db.transaction([NOTES_STORE, ATTACHMENTS_STORE], 'readwrite');
+
+  for (const note of snapshot.notes || []) {
+    tx.objectStore(NOTES_STORE).put(note);
+  }
+
+  for (const attachment of snapshot.attachments || []) {
+    tx.objectStore(ATTACHMENTS_STORE).put(attachment);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('Recovery restore transaction aborted'));
+  });
+
+  db.close();
+  return (snapshot.notes || []).length;
+}
