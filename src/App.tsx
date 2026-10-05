@@ -23,7 +23,7 @@ import { GoalsView } from './components/GoalsView';
 import { StaticHeaderTimer } from './components/StaticHeaderTimer';
 import { renderPdfPages, getPdfMetadata } from './utils/pdfLoader';
 import { PdfPageRangeModal, PdfImportRequest } from './components/PdfPageRangeModal';
-import { saveNotesToStorage, loadNotesFromStorage, loadNoteFromStorage, exportStorageSnapshot } from './utils/storage';
+import { saveNotesToStorage, loadNotesFromStorage, loadNoteFromStorage, exportStorageSnapshot, restoreStorageSnapshot } from './utils/storage';
 import { loadBrandingSettings, DEFAULT_THUNDER_CHARACTER } from './components/BrandingSettings';
 
 const INITIAL_NOTE: NoteItem = {
@@ -643,6 +643,35 @@ export default function App() {
     } catch (err) {
       console.error('Recovery export failed:', err);
       setRecoveryStatus('Recovery export failed. The original database was not modified.');
+    }
+  };
+
+  const handleRestoreRecoveryFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setRecoveryStatus('Restoring recovery backup...');
+    try {
+      const snapshot = JSON.parse(await file.text());
+      if (!Array.isArray(snapshot?.notes)) {
+        throw new Error('Invalid Thunder Notebook recovery file');
+      }
+
+      const count = await restoreStorageSnapshot(snapshot);
+      const restored = await loadNotesFromStorage();
+
+      if (restored && restored.length > 0) {
+        setNotes(restored);
+        setActiveNoteId((currentId) =>
+          restored.some((n) => n.id === currentId) ? currentId : restored[0].id
+        );
+      }
+
+      setRecoveryStatus(`Restored ${count} notes. Your existing local notes were preserved.`);
+    } catch (err) {
+      console.error('Recovery restore failed:', err);
+      setRecoveryStatus('Restore failed. The recovery file was not applied.');
     }
   };
 
@@ -1416,13 +1445,24 @@ export default function App() {
                       Read-only export of the current IndexedDB notes and attachments. Nothing is deleted.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleExportRecoverySnapshot}
-                    className="shrink-0 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
-                  >
-                    Export Recovery Backup
-                  </button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleExportRecoverySnapshot}
+                      className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
+                    >
+                      Export Recovery Backup
+                    </button>
+                    <label className={`cursor-pointer rounded-lg border px-4 py-2 text-sm font-medium ${darkMode ? 'border-zinc-700 text-zinc-200 hover:bg-zinc-800' : 'border-zinc-300 text-zinc-700 hover:bg-white'}`}>
+                      Restore Backup
+                      <input
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleRestoreRecoveryFile}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
                 </div>
                 {recoveryStatus && (
                   <p className={`mt-3 text-sm ${darkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>
