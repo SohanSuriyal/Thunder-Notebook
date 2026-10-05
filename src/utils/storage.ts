@@ -254,3 +254,43 @@ export async function saveNotesToStorage(notes: NoteItem[]): Promise<void> {
     console.warn('IndexedDB cleanup failed:', err);
   }
 }
+
+
+/**
+ * Read the complete IndexedDB contents without modifying or deleting anything.
+ * Intended for recovery/backup tools.
+ */
+export async function exportStorageSnapshot(): Promise<{
+  database: string;
+  version: number;
+  notes: StoredNote[];
+  attachments: StoredAttachment[];
+  exportedAt: string;
+}> {
+  const db = await openDb();
+
+  const readAll = <T,>(storeName: string): Promise<T[]> =>
+    new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readonly');
+      const request = tx.objectStore(storeName).getAll();
+      request.onsuccess = () => resolve((request.result || []) as T[]);
+      request.onerror = () => reject(request.error);
+    });
+
+  try {
+    const [notes, attachments] = await Promise.all([
+      readAll<StoredNote>(NOTES_STORE),
+      readAll<StoredAttachment>(ATTACHMENTS_STORE),
+    ]);
+
+    return {
+      database: DB_NAME,
+      version: db.version,
+      notes,
+      attachments,
+      exportedAt: new Date().toISOString(),
+    };
+  } finally {
+    db.close();
+  }
+}
