@@ -23,7 +23,7 @@ import { GoalsView } from './components/GoalsView';
 import { StaticHeaderTimer } from './components/StaticHeaderTimer';
 import { renderPdfPages, getPdfMetadata } from './utils/pdfLoader';
 import { PdfPageRangeModal, PdfImportRequest } from './components/PdfPageRangeModal';
-import { saveNotesToStorage, loadNotesFromStorage, loadNoteFromStorage } from './utils/storage';
+import { saveNotesToStorage, loadNotesFromStorage, loadNoteFromStorage, exportStorageSnapshot } from './utils/storage';
 import { loadBrandingSettings, DEFAULT_THUNDER_CHARACTER } from './components/BrandingSettings';
 
 const INITIAL_NOTE: NoteItem = {
@@ -130,7 +130,7 @@ export default function App() {
 
   const [activeNoteId, setActiveNoteId] = useState<string>(INITIAL_NOTE.id);
   const [activeTopicCanvas, setActiveTopicCanvas] = useState<{ subject: string; topic: string } | null>(null);
-  const [isSaved, setIsSaved] = useState<boolean>(true);
+  const [isSaved, setIsSaved] = useState<boolean>(true);\n  const [storageLoaded, setStorageLoaded] = useState<boolean>(false);\n  const [recoveryStatus, setRecoveryStatus] = useState<string>('');
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSubjectTopicSidebarOpen, setIsSubjectTopicSidebarOpen] = useState<boolean>(true);
 
@@ -209,12 +209,29 @@ export default function App() {
 
   // Load lightweight note metadata only on startup. Attachments are intentionally not loaded here.
   useEffect(() => {
-    loadNotesFromStorage().then((saved) => {
-      if (saved && saved.length > 0) {
-        setNotes(saved);
-        setActiveNoteId((currentId) => saved.some((n) => n.id === currentId) ? currentId : saved[0].id);
-      }
-    });
+    let cancelled = false;
+
+    loadNotesFromStorage()
+      .then((saved) => {
+        if (cancelled) return;
+
+        if (saved && saved.length > 0) {
+          setNotes(saved);
+          setActiveNoteId((currentId) =>
+            saved.some((n) => n.id === currentId) ? currentId : saved[0].id
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load saved notes:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setStorageLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load heavy PDF/image data only when the selected note changes.
@@ -245,10 +262,12 @@ export default function App() {
     };
   }, [activeNote.id]);
 
-  // Persist notes using incremental IndexedDB writes.
+  // Persist notes only after the initial IndexedDB load has completed.
+  // This prevents the initial demo state from overwriting real user data.
   useEffect(() => {
+    if (!storageLoaded) return;
     saveNotesToStorage(notes);
-  }, [notes]);
+  }, [notes, storageLoaded]);
 
   const [pdfImportModal, setPdfImportModal] = useState<{
     isOpen: boolean;
@@ -601,6 +620,30 @@ export default function App() {
     setNotes(demo);
     setActiveNoteId(demo[0].id);
     saveNotesToStorage(demo);
+  };
+
+  const handleExportRecoverySnapshot = async () => {
+    setRecoveryStatus('Reading local notebook storage...');
+    try {
+      const snapshot = await exportStorageSnapshot();
+      const payload = JSON.stringify(snapshot, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `thunder-notebook-recovery-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+
+      setRecoveryStatus(
+        `Recovery export complete: ${snapshot.notes.length} notes and ${snapshot.attachments.length} attachment records found.`
+      );
+    } catch (err) {
+      console.error('Recovery export failed:', err);
+      setRecoveryStatus('Recovery export failed. The original database was not modified.');
+    }
   };
 
   const handleImportNotes = (importedNotes: NoteItem[]) => {
@@ -1363,7 +1406,32 @@ export default function App() {
         )}
 
         {currentPage === 'settings' && (
-          <SettingsView
+          <>
+            <div className="px-4 pt-4">
+              <div className={`rounded-xl border p-4 ${darkMode ? 'border-zinc-700 bg-zinc-900' : 'border-violet-200 bg-violet-50'}`}>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className={`font-semibold ${darkMode ? 'text-zinc-100' : 'text-zinc-900'}`}>Notebook Recovery</h3>
+                    <p className={`text-sm mt-1 ${darkMode ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                      Read-only export of the current IndexedDB notes and attachments. Nothing is deleted.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportRecoverySnapshot}
+                    className="shrink-0 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700"
+                  >
+                    Export Recovery Backup
+                  </button>
+                </div>
+                {recoveryStatus && (
+                  <p className={`mt-3 text-sm ${darkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>
+                    {recoveryStatus}
+                  </p>
+                )}
+              </div>
+            </div>
+            <SettingsView
             settings={settings}
             onUpdateSettings={(newSettings) => setSettings((s) => ({ ...s, ...newSettings }))}
             notes={notes}
